@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Données locales (ne pas committer)
+data/
+*.parquet
+*.json.bak
+
+# Logs
+logs/
+*.log
+
+# Docker volumes
+postgres-data/
+minio-data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Solutions (déverrouillées vendredi soir)
+solutions/*
+!solutions/.gitkeep
+
+# Airflow
+airflow.cfg
+airflow.db

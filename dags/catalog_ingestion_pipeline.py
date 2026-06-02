@@ -18,6 +18,7 @@ Architecture :
 
 from datetime import datetime, timedelta
 import logging
+import os
 
 from airflow import DAG
 from airflow.decorators import task
@@ -114,8 +115,8 @@ with DAG(
         s3 = boto3.client(
             's3',
             endpoint_url='http://minio:9000',
-            aws_access_key_id='minioadmin',
-            aws_secret_access_key='minioadmin'
+            aws_access_key_id=os.getenv("MINIO_ACCESS_KEY"),
+            aws_secret_access_key=os.getenv("MINIO_SECRET_KEY")
         )
 
         catalogs = []
@@ -161,7 +162,7 @@ with DAG(
                     errors_count += 1
                     cursor.execute("""
                         INSERT INTO dead_letter_events
-                            (id, source, error_type, payload, created_at)
+                            (id, original_topic, error_type, payload, created_at)
                         VALUES (%s, %s, %s, %s, NOW())
                     """, (
                         str(uuid.uuid4()),
@@ -179,7 +180,7 @@ with DAG(
                     errors_count += 1
                     cursor.execute("""
                         INSERT INTO dead_letter_events
-                            (id, source, error_type, payload, created_at)
+                            (id, original_topic, error_type, payload, created_at)
                         VALUES (%s, %s, %s, %s, NOW())
                     """, (
                         str(uuid.uuid4()),
@@ -197,7 +198,7 @@ with DAG(
                     errors_count += 1
                     cursor.execute("""
                         INSERT INTO dead_letter_events
-                            (id, source, error_type, payload, created_at)
+                            (id, original_topic, error_type, payload, created_at)
                         VALUES (%s, %s, %s, %s, NOW())
                     """, (
                         str(uuid.uuid4()),
@@ -287,13 +288,12 @@ with DAG(
         conn   = hook.get_conn()
         cursor = conn.cursor()
 
-        # ── Upsert Artists ────────────────────────────────────
         artist_tuples = [
             (
                 a["id"],
                 a["name"],
                 a.get("label", ""),
-                json.dumps(a.get("genres", [])),
+                a.get("genres", []),
                 a.get("monthly_listeners", 0),
             )
             for a in transformed["artists"]
@@ -321,8 +321,7 @@ with DAG(
             INSERT INTO albums (id, artist_id, title, release_year, total_tracks)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
-                title        = EXCLUDED.title,
-                updated_at   = NOW()
+                title        = EXCLUDED.title
         """, album_tuples)
 
         # ── Upsert Tracks ─────────────────────────────────────
@@ -383,3 +382,7 @@ with DAG(
     transformed = transform_catalog(validated)
     stats       = load_to_postgres(transformed)
     notify_success(stats)
+
+
+if __name__ == "__main__":
+    dag.test()

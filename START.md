@@ -83,3 +83,13 @@ Tout doit passer
 2 - `pytest tests/unit/ -v`
 
 3 - `pytest tests/ -v --tb=short`
+
+## Issue 11
+
+Vérifier la présence des 6 topics. http://localhost:8090
+
+## Issue 12
+
+Lancer le simulator.py `python -m src.p2p_simulator.simulator --peers 10 --rate 3`.
+
+Vérifier dans Kafka UI l'augmentation de la quantité d'envent dans listening_events

@@ -14,7 +14,7 @@ TODO Phase 1 :  Compléter _generate_listening_event() et _publish_to_redis()
 TODO Phase 2 :  Activer _publish_to_kafka() et le mode fraude
 """
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(encoding="utf-8-sig")
 
 
 import argparse
@@ -162,7 +162,8 @@ class P2PSimulator:
         
         try:
             conn = psycopg2.connect(
-                host=host, port=port, user=user, password=password, dbname=dbname
+                host=host, port=port, user=user, password=password, dbname=dbname, 
+                options="-c client_encoding=UTF8"
             )
             cursor = conn.cursor()
             cursor.execute("SELECT id, duration_ms FROM tracks LIMIT 1000;")

@@ -28,8 +28,31 @@ Vérifier qu'ils sont stockés dans Minio (http://localhost:9001/browser/spotify
 
 ## Issue 7
 
+1 - Activer le dag aggrégation pipeline, attendre la fin de la task.
+
+2 - Vérifier : `docker exec -it data-pipelines-production-postgres-1 psql -U spotify -d spotify -c "SELECT COUNT(*) FROM daily_streams; SELECT COUNT(*) FROM artist_stats;"`
+
+Résultat attendu :
+``` 
+count 
+-------
+    50
+(1 row)
+
+ count 
+-------
+    30
+(1 row)
+
+```
+
 ## Issue 8
 
+1 - Activer le dag recommandation pipeline, attendre la fin de la task.
+
+2 - Vérifier que les reco ont été ajouté : `docker exec -it data-pipelines-production-redis-1 redis-cli -n 1 keys "reco:*"` (Ne doit pas être vide)
+
+2 bis - `docker exec -it data-pipelines-production-postgres-1 psql -U spotify -d spotify -c "SELECT COUNT(*) FROM recommendations;"` (Ne doit pas être vide)
 
 ## Issue 9
 
@@ -50,3 +73,13 @@ Résultat attendu :
 4 - Vérifie l'état de l'évent : `docker compose exec postgres psql -U spotify -d spotify -c "SELECT id, status, retry_count FROM dead_letter_events;"`
 
 Résultat attendu : `status : abandoned`
+
+## Issue 10
+
+Tout doit passer
+
+1 - `pytest tests/structure/ -v`
+
+2 - `pytest tests/unit/ -v`
+
+3 - `pytest tests/ -v --tb=short`

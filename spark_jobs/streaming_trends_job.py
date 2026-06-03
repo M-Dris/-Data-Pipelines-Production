@@ -109,7 +109,21 @@ def read_kafka_stream(spark: SparkSession):
     Returns:
         DataFrame streaming avec colonnes typées
     """
-    raise NotImplementedError("TODO : implémenter read_kafka_stream()")
+    raw = (
+        spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
+        .option("subscribe", KAFKA_TOPIC)
+        .option("startingOffsets", "latest")
+        .load()
+    )
+    return (
+        raw
+        .select(F.from_json(F.col("value").cast("string"), LISTENING_EVENT_SCHEMA).alias("data"))
+        .select("data.*")
+        .withColumn("event_time", F.col("timestamp").cast(TimestampType()))
+        .drop("timestamp")
+    )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -164,14 +178,23 @@ def main():
     # Lecture Kafka
     events_df = read_kafka_stream(spark)
 
-    # Chargement du catalogue (jointure statique — Phase 2, seq 2.3)
-    # catalog_df = spark.read.jdbc(POSTGRES_URL, "tracks", properties=POSTGRES_PROPS)
+    # Issue #13 : sortie console pour valider la lecture du topic
+    # Issue #13 : checkpoint local (MinIO/S3A requis pour Issue #14+)
+    query = (
+        events_df.writeStream
+        .format("console")
+        .outputMode("append")
+        .option("truncate", False)
+        .trigger(processingTime="10 seconds")
+        .option("checkpointLocation", CHECKPOINT_PATH)
+        .start()
+    )
 
-    # Agrégations
-    query_top_tracks = compute_top_tracks_tumbling(events_df)
+    # Issue #14 : agrégations (décommenter)
+    # catalog_df = spark.read.jdbc(POSTGRES_URL, "tracks", properties=POSTGRES_PROPS)
+    # query_top_tracks = compute_top_tracks_tumbling(events_df)
     # query_genres     = compute_genre_listeners_sliding(events_df, catalog_df)
 
-    # Attendre l'arrêt gracieux
     spark.streams.awaitAnyTermination()
 
 

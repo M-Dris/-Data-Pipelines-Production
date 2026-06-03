@@ -93,3 +93,20 @@ Vérifier la présence des 6 topics. http://localhost:8090
 Lancer le simulator.py `python -m src.p2p_simulator.simulator --peers 10 --rate 3`.
 
 Vérifier dans Kafka UI l'augmentation de la quantité d'envent dans listening_events
+
+## Issue 13
+
+1 - Démarrer le cluster Spark : `docker compose up -d spark-master spark-worker-1`
+
+2 - Vérifier que le worker est bien enregistré : `docker logs spotify-spark-master`
+Résultat attendu : `Registering worker ... with 2 cores, 2.0 GiB RAM`
+
+3 - Lancer le job en mode continu (processingTime) :
+`docker exec spotify-spark-master spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 /opt/spark-jobs/streaming_trends_job.py`
+
+Les events JSON doivent apparaître dans la console toutes les 10 secondes. Le checkpoint est écrit dans MinIO (`s3a://spotify-checkpoints/streaming_trends`).
+
+4 - Tester le mode Once (traite un seul batch puis s'arrête) : modifier `.trigger(processingTime="10 seconds")` en `.trigger(once=True)` dans `spark_jobs/streaming_trends_job.py`, relancer la même commande.
+Résultat attendu : un seul batch affiché, puis le job se termine proprement.
+
+5 - Vérifier le checkpoint dans MinIO : http://localhost:9001/browser/spotify-checkpoints

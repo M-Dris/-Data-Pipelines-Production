@@ -29,6 +29,7 @@ TODO :
 import json
 import logging
 import os
+import sys
 import tempfile
 import time
 import uuid
@@ -39,6 +40,9 @@ from typing import Any
 from airflow import DAG
 from airflow.decorators import task
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.transformations.events import is_valid_listening_event
 DAG_DOC = """
 ## streaming_events_pipeline
 
@@ -270,31 +274,19 @@ with DAG(
             return True, None
 
         for event in raw_events.get("listening", []):
-            ok, error_message = validate_common(event, listening_required)
-            if ok:
-                try:
-                    duration_ms = int(event["duration_ms"])
-                    if duration_ms <= 0:
-                        raise ValueError("duration_ms must be positive")
-                except Exception:
-                    ok = False
-                    error_message = "duration_ms invalide"
-
-            if ok:
+            if is_valid_listening_event(event):
                 normalized = dict(event)
                 normalized["timestamp"] = _normalize_timestamp(normalized["timestamp"])
                 normalized["duration_ms"] = int(normalized["duration_ms"])
                 normalized["completed"] = bool(normalized.get("completed", normalized["duration_ms"] > 30000))
                 valid_listening.append(normalized)
             else:
-                dlq_records.append(
-                    {
-                        "original_topic": "listening_events",
-                        "error_type": "validation",
-                        "payload": event,
-                        "error_message": error_message,
-                    }
-                )
+                dlq_records.append({
+                    "original_topic": "listening_events",
+                    "error_type": "validation",
+                    "payload": event,
+                    "error_message": "Invalid listening event",
+                })
 
         for event in raw_events.get("p2p_network", []):
             ok, error_message = validate_common(event, p2p_required)

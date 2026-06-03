@@ -19,11 +19,16 @@ Architecture :
 from datetime import datetime, timedelta
 import logging
 import os
+import sys
 
 from airflow import DAG
 from airflow.decorators import task
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.models import Variable
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from src.transformations.catalog import deduplicate_artists
 
 # ─────────────────────────────────────────────────────────────
 # DOCUMENTATION DU DAG (obligatoire pour la note)
@@ -225,23 +230,12 @@ with DAG(
     @task(task_id="transform_catalog")
     def transform_catalog(validated: dict) -> dict:
         """
-        Normalise les données du catalogue.
-        - Noms d'artistes : strip + title case
-        - Durées de tracks : filtre les valeurs aberrantes
-        - Supprime les doublons par id
+        Normalise les données du catalogue via les fonctions importées.
         """
         data = validated["valid"]
 
-        # Normaliser les artistes
-        seen_artist_ids = set()
-        clean_artists = []
-        for artist in data["artists"]:
-            if artist["id"] in seen_artist_ids:
-                continue
-            seen_artist_ids.add(artist["id"])
-            artist["name"] = artist["name"].strip().title()
-            clean_artists.append(artist)
-
+        # Deduplicate and clean artists using the helper
+        clean_artists = deduplicate_artists(data["artists"])
         # Normaliser les albums
         seen_album_ids = set()
         clean_albums = []
@@ -252,14 +246,13 @@ with DAG(
             album["title"] = album["title"].strip().title()
             clean_albums.append(album)
 
-        # Normaliser les tracks
+        # Normaliser les tracks (keep existing logic)
         seen_track_ids = set()
         clean_tracks = []
         for track in data["tracks"]:
             if track["id"] in seen_track_ids:
                 continue
             seen_track_ids.add(track["id"])
-            # Filtrer les durées aberrantes (< 0 ou > 1 heure)
             if not (0 < track["duration_ms"] < 3_600_000):
                 logging.warning(f"⚠️ Track avec durée invalide ignorée : {track['id']}")
                 continue
@@ -300,9 +293,12 @@ with DAG(
         cursor.executemany("""
             INSERT INTO artists (id, name, label, genres, monthly_listeners)
             VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (name, label) DO UPDATE SET
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                label = EXCLUDED.label,
+                genres = EXCLUDED.genres,
                 monthly_listeners = EXCLUDED.monthly_listeners,
-                updated_at        = NOW()
+                updated_at = NOW()
         """, artist_tuples)
 
         # ── Upsert Albums ─────────────────────────────────────

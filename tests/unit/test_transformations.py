@@ -18,15 +18,15 @@ from datetime import datetime
 # Adaptez ces imports selon votre structure src/
 # ─────────────────────────────────────────────────────────────
 
-# from src.transformations.catalog import (
-#     normalize_artist_name,
-#     validate_track_schema,
-#     deduplicate_tracks,
-# )
-# from src.transformations.events import (
-#     enrich_listening_event,
-#     is_valid_listening_event,
-# )
+from src.transformations.catalog import (
+    normalize_artist_name,
+    validate_track_schema,
+    deduplicate_artists
+)
+
+from src.transformations.events import (
+    is_valid_listening_event
+)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -83,25 +83,24 @@ class TestNormalizeArtistName:
     puis décommenter ces tests.
     """
 
-    @pytest.mark.skip(reason="TODO : implémenter normalize_artist_name()")
+    # @pytest.mark.skip(reason="TODO : implémenter normalize_artist_name()")
     def test_strips_whitespace(self):
-        # from src.transformations.catalog import normalize_artist_name
-        # assert normalize_artist_name("  The Beatles  ") == "The Beatles"
+        assert normalize_artist_name("  The Beatles  ") == "The Beatles"
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter normalize_artist_name()")
+    # @pytest.mark.skip(reason="TODO : implémenter normalize_artist_name()")
     def test_title_case(self):
-        # assert normalize_artist_name("the beatles") == "The Beatles"
+        assert normalize_artist_name("the beatles") == "The Beatles"
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter normalize_artist_name()")
+    # @pytest.mark.skip(reason="TODO : implémenter normalize_artist_name()")
     def test_handles_none(self):
-        # assert normalize_artist_name(None) is None
+        assert normalize_artist_name(None) is None
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter normalize_artist_name()")
+    # @pytest.mark.skip(reason="TODO : implémenter normalize_artist_name()")
     def test_preserves_special_chars(self):
-        # assert normalize_artist_name("björk") == "Björk"
+        assert normalize_artist_name("björk") == "Björk"
         pass
 
 
@@ -111,35 +110,32 @@ class TestNormalizeArtistName:
 
 class TestValidateTrackSchema:
 
-    @pytest.mark.skip(reason="TODO : implémenter validate_track_schema()")
+    # @pytest.mark.skip(reason="TODO : implémenter validate_track_schema()")
     def test_valid_track_passes(self, valid_track):
-        # from src.transformations.catalog import validate_track_schema
-        # errors = validate_track_schema(valid_track)
-        # assert errors == []
+        errors = validate_track_schema(valid_track)
+        assert errors == []
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter validate_track_schema()")
+    # @pytest.mark.skip(reason="TODO : implémenter validate_track_schema()")
     def test_missing_title_fails(self, valid_track):
-        # from src.transformations.catalog import validate_track_schema
-        # track_no_title = {k: v for k, v in valid_track.items() if k != "title"}
-        # errors = validate_track_schema(track_no_title)
-        # assert "title" in str(errors)
+        track_no_title = {k: v for k, v in valid_track.items() if k != "title"}
+        errors = validate_track_schema(track_no_title)
+        assert "title" in str(errors)
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter validate_track_schema()")
+    # @pytest.mark.skip(reason="TODO : implémenter validate_track_schema()")
     def test_negative_duration_fails(self, valid_track):
-        # from src.transformations.catalog import validate_track_schema
-        # valid_track["duration_ms"] = -1
-        # errors = validate_track_schema(valid_track)
-        # assert len(errors) > 0
+        valid_track["duration_ms"] = -1
+        errors = validate_track_schema(valid_track)
+        assert len(errors) > 0
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter validate_track_schema()")
+    # @pytest.mark.skip(reason="TODO : implémenter validate_track_schema()")
     def test_too_long_duration_fails(self, valid_track):
         # 10 heures — clairement invalide
-        # valid_track["duration_ms"] = 36_000_001
-        # errors = validate_track_schema(valid_track)
-        # assert len(errors) > 0
+        valid_track["duration_ms"] = 36_000_001
+        errors = validate_track_schema(valid_track)
+        assert len(errors) > 0
         pass
 
 
@@ -149,31 +145,31 @@ class TestValidateTrackSchema:
 
 class TestListeningEventValidation:
 
-    @pytest.mark.skip(reason="TODO : implémenter is_valid_listening_event()")
+    # @pytest.mark.skip(reason="TODO : implémenter is_valid_listening_event()")
     def test_valid_event_passes(self, valid_listening_event):
         # from src.transformations.events import is_valid_listening_event
-        # assert is_valid_listening_event(valid_listening_event) is True
+        assert is_valid_listening_event(valid_listening_event) is True
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter is_valid_listening_event()")
+    # @pytest.mark.skip(reason="TODO : implémenter is_valid_listening_event()")
     def test_missing_user_id_fails(self, valid_listening_event):
         # from src.transformations.events import is_valid_listening_event
-        # del valid_listening_event["user_id"]
-        # assert is_valid_listening_event(valid_listening_event) is False
+        del valid_listening_event["user_id"]
+        assert is_valid_listening_event(valid_listening_event) is False
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter is_valid_listening_event()")
+    # @pytest.mark.skip(reason="TODO : implémenter is_valid_listening_event()")
     def test_future_timestamp_fails(self, valid_listening_event):
         # Un timestamp dans le futur est suspect
-        # valid_listening_event["timestamp"] = "2099-01-01T00:00:00Z"
-        # assert is_valid_listening_event(valid_listening_event) is False
+        valid_listening_event["timestamp"] = "2099-01-01T00:00:00Z"
+        assert is_valid_listening_event(valid_listening_event) is False
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter is_valid_listening_event()")
+    # @pytest.mark.skip(reason="TODO : implémenter is_valid_listening_event()")
     def test_bot_pattern_detected(self):
         # duration_ms < 5000 → pattern bot
-        # event = {..., "duration_ms": 100, "completed": False}
-        # assert is_valid_listening_event(event) is False
+        event = {"event_id": "test", "user_id": "user", "track_id": "track", "timestamp": "2020-01-01T00:00:00Z", "duration_ms": 100, "completed": False, "device_type": "mobile", "geo_country": "FR", "event_source": "p2p"}
+        assert is_valid_listening_event(event) is False
         pass
 
 
@@ -183,24 +179,23 @@ class TestListeningEventValidation:
 
 class TestDeduplication:
 
-    @pytest.mark.skip(reason="TODO : implémenter deduplicate_tracks()")
+    # @pytest.mark.skip(reason="TODO : implémenter deduplicate_tracks()")
     def test_removes_duplicate_artists_same_label(self, catalog_with_duplicates):
         # from src.transformations.catalog import deduplicate_artists
-        # result = deduplicate_artists(catalog_with_duplicates["artists"])
-        # names = [a["name"] for a in result]
-        # assert names.count("The Beatles") == 1
+        result = deduplicate_artists(catalog_with_duplicates["artists"])
+        names = [a["name"] for a in result]
+        assert names.count("The Beatles") == 1
         pass
 
-    @pytest.mark.skip(reason="TODO : implémenter deduplicate_tracks()")
+    # @pytest.mark.skip(reason="TODO : implémenter deduplicate_tracks()")
     def test_keeps_different_labels(self, catalog_with_duplicates):
         # Même artiste, label différent → garder les deux
-        # from src.transformations.catalog import deduplicate_artists
-        # artists = [
-        #     {"id": "1", "name": "Artist X", "label": "Label A"},
-        #     {"id": "2", "name": "Artist X", "label": "Label B"},
-        # ]
-        # result = deduplicate_artists(artists)
-        # assert len(result) == 2
+        artists = [
+            {"id": "1", "name": "Artist X", "label": "Label A"},
+            {"id": "2", "name": "Artist X", "label": "Label B"},
+        ]
+        result = deduplicate_artists(artists)
+        assert len(result) == 2
         pass
 
 

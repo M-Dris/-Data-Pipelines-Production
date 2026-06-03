@@ -103,14 +103,9 @@ with DAG(
 
     @task(task_id="extract_from_minio")
     def extract_from_minio(**context) -> list[dict]:
-        """
-        Télécharge les fichiers JSON des labels depuis MinIO.
-        - Se connecte à MinIO avec boto3
-        - Télécharge et parse chaque fichier JSON
-        - Si un fichier est manquant : log un warning et continue
-        """
         import boto3
         import json
+        from botocore.exceptions import ClientError
 
         s3 = boto3.client(
             's3',
@@ -121,14 +116,18 @@ with DAG(
 
         catalogs = []
         for filename in LABEL_FILES:
-            try:
-                obj = s3.get_object(Bucket=MINIO_BUCKET, Key=filename)
-                catalog = json.loads(obj['Body'].read())
-                catalogs.append(catalog)
-                logging.info(f"✅ Fichier téléchargé : {filename}")
-            except Exception as e:
-                logging.warning(f"⚠️ Fichier manquant ou erreur : {filename} — {e}")
-                continue
+            local_path = f"/opt/airflow/src/data/labels/{filename}"
+            
+            # Upload vers MinIO
+            with open(local_path, "rb") as f:
+                s3.put_object(Bucket=MINIO_BUCKET, Key=filename, Body=f, ContentType="application/json")
+                logging.info(f"⬆️ Fichier uploadé : {filename}")
+
+            # Télécharge et retourne
+            obj = s3.get_object(Bucket=MINIO_BUCKET, Key=filename)
+            catalog = json.loads(obj['Body'].read())
+            catalogs.append(catalog)
+            logging.info(f"✅ Fichier téléchargé : {filename}")
 
         return catalogs
 

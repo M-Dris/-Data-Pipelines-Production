@@ -13,6 +13,9 @@ Usage :
 TODO Phase 1 :  Compléter _generate_listening_event() et _publish_to_redis()
 TODO Phase 2 :  Activer _publish_to_kafka() et le mode fraude
 """
+from dotenv import load_dotenv
+load_dotenv(encoding="utf-8-sig")
+
 
 import argparse
 import json
@@ -25,7 +28,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import redis
-
 # Phase 2 — décommenter quand Kafka est prêt
 # from confluent_kafka import Producer
 
@@ -94,6 +96,10 @@ class P2PSimulator:
         self.event_count = 0
         self.redis_available = False
 
+        # Charger le catalogue PostgreSQL
+        self._load_catalog()
+
+
         # Connexion Redis
         self.redis = redis.from_url(REDIS_URL, decode_responses=True)
         try:
@@ -137,6 +143,40 @@ class P2PSimulator:
             except Exception as e:
                 logger.error(f"Erreur lors de la génération d'événement : {e}")
                 time.sleep(1)
+
+    def _load_catalog(self):
+        """
+        Connecte à PostgreSQL et remplace SAMPLE_TRACKS par les vraies données.
+        """
+        global SAMPLE_TRACKS
+        import psycopg2
+        import os
+
+        host = os.getenv("POSTGRES_HOST", "127.0.0.1").strip()
+        port = os.getenv("POSTGRES_PORT", "5432").strip()
+        user = os.getenv("POSTGRES_USER", "spotify").strip()
+        password = os.getenv("POSTGRES_PASSWORD", "spotify").strip()
+        dbname = os.getenv("POSTGRES_DB", "spotify").strip()
+
+        print(f"Connexion à PostgreSQL pour charger le catalogue : {user}@{host}:{port}/{dbname}")
+        
+        try:
+            conn = psycopg2.connect(
+                host=host, port=port, user=user, password=password, dbname=dbname, 
+                options="-c client_encoding=UTF8"
+            )
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, duration_ms FROM tracks LIMIT 1000;")
+            tracks = cursor.fetchall()
+            if tracks:
+                SAMPLE_TRACKS = [{"id": str(t[0]), "duration_ms": t[1]} for t in tracks]
+                logger.info(f"{len(SAMPLE_TRACKS)} morceaux chargés depuis la BD.")
+            else:
+                logger.warning("La table tracks est vide, on utilise les fausses données.")
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Impossible de charger le catalogue PostgreSQL : {e}")
 
     # ── Génération d'événements ──────────────────────────────
 

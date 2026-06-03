@@ -18,6 +18,7 @@ x-airflow-common: &airflow-common
     MINIO_ACCESS_KEY: minioadmin
     MINIO_SECRET_KEY: minioadmin
     REDIS_URL: redis://redis:6379/1
+    KAFKA_BOOTSTRAP: kafka-1:9092,kafka-2:9094,kafka-3:9096
   volumes:
     - ./dags:/opt/airflow/dags
     - ./plugins:/opt/airflow/plugins
@@ -158,87 +159,146 @@ services:
         airflow connections add spotify_minio \
           --conn-type aws \
           --conn-extra '{"endpoint_url": "http://minio:9000", "aws_access_key_id": "minioadmin", "aws_secret_access_key": "minioadmin"}'
+        airflow connections add spotify_kafka \
+          --conn-type generic \
+          --conn-host kafka-1 \
+          --conn-port 9092 \
+          --conn-extra '{"bootstrap_servers": "kafka-1:9092,kafka-2:9094,kafka-3:9096"}'
         echo "Airflow initialisé avec succès"
 
   # ─────────────────────────────────────────
-  # KAFKA (Phase 2 — décommenter jeudi matin)
+  # KAFKA (Phase 2 — cluster KRaft 3 brokers)
   # ─────────────────────────────────────────
 
-  # kafka-1:
-  #   image: confluentinc/cp-kafka:7.6.0
-  #   hostname: kafka-1
-  #   environment:
-  #     KAFKA_NODE_ID: 1
-  #     KAFKA_PROCESS_ROLES: broker,controller
-  #     KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-  #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092
-  #     KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-  #     KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-  #     KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
-  #     KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
-  #     KAFKA_DEFAULT_REPLICATION_FACTOR: 3
-  #     KAFKA_MIN_INSYNC_REPLICAS: 2
-  #     KAFKA_CLUSTER_ID: spotify-cluster-001
-  #   volumes:
-  #     - kafka-1-data:/var/lib/kafka/data
-  #   ports:
-  #     - "9092:9092"
+  kafka-1:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka-1
+    container_name: kafka-1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # PLAINTEXT  = inter-broker (réseau Docker)
+      # CONTROLLER = quorum KRaft
+      # EXTERNAL   = accès depuis l'hôte (tests, producers locaux)
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092,EXTERNAL://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9095,3@kafka-3:9097
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
-  # kafka-2:
-  #   image: confluentinc/cp-kafka:7.6.0
-  #   hostname: kafka-2
-  #   environment:
-  #     KAFKA_NODE_ID: 2
-  #     KAFKA_PROCESS_ROLES: broker,controller
-  #     KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9094,CONTROLLER://0.0.0.0:9095
-  #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9094
-  #     KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-  #     KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-  #     KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9095,3@kafka-3:9097
-  #     KAFKA_CLUSTER_ID: spotify-cluster-001
-  #   volumes:
-  #     - kafka-2-data:/var/lib/kafka/data
+  kafka-2:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka-2
+    container_name: kafka-2
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9094,CONTROLLER://0.0.0.0:9095,EXTERNAL://0.0.0.0:29094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9094,EXTERNAL://localhost:29094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9095,3@kafka-3:9097
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+    ports:
+      - "9094:9094"
+      - "29094:29094"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9094"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
-  # kafka-3:
-  #   image: confluentinc/cp-kafka:7.6.0
-  #   hostname: kafka-3
-  #   environment:
-  #     KAFKA_NODE_ID: 3
-  #     KAFKA_PROCESS_ROLES: broker,controller
-  #     KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9096,CONTROLLER://0.0.0.0:9097
-  #     KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9096
-  #     KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-  #     KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
-  #     KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9095,3@kafka-3:9097
-  #     KAFKA_CLUSTER_ID: spotify-cluster-001
-  #   volumes:
-  #     - kafka-3-data:/var/lib/kafka/data
+  kafka-3:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka-3
+    container_name: kafka-3
+    environment:
+      KAFKA_NODE_ID: 3
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9096,CONTROLLER://0.0.0.0:9097,EXTERNAL://0.0.0.0:29096
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9096,EXTERNAL://localhost:29096
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9095,3@kafka-3:9097
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+      KAFKA_MIN_INSYNC_REPLICAS: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+    ports:
+      - "9096:9096"
+      - "29096:29096"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9096"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
-  # kafka-ui:
-  #   image: provectuslabs/kafka-ui:latest
-  #   depends_on:
-  #     - kafka-1
-  #   ports:
-  #     - "8090:8080"
-  #   environment:
-  #     KAFKA_CLUSTERS_0_NAME: spotify-local
-  #     KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9092,kafka-2:9094,kafka-3:9096
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      kafka-1:
+        condition: service_healthy
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: spotify-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:9092,kafka-2:9094,kafka-3:9096
+    restart: on-failure
 
-  # kafka-init:
-  #   image: confluentinc/cp-kafka:7.6.0
-  #   depends_on:
-  #     - kafka-1
-  #   entrypoint: >
-  #     /bin/sh -c "
-  #     sleep 15;
-  #     kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic listening_events --partitions 6 --replication-factor 3 --config retention.ms=604800000;
-  #     kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic p2p_network_events --partitions 6 --replication-factor 3;
-  #     kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic catalog_updates --partitions 3 --replication-factor 3 --config cleanup.policy=compact;
-  #     kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic enriched_events --partitions 6 --replication-factor 3;
-  #     kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic fraud_alerts --partitions 3 --replication-factor 3;
-  #     kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic late_listening_events --partitions 3 --replication-factor 3;
-  #     echo 'Topics Kafka créés';
-  #     "
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kafka-init
+    depends_on:
+      kafka-1:
+        condition: service_healthy
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Création des topics Kafka...';
+      kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic listening_events --partitions 6 --replication-factor 3 --config retention.ms=604800000;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic p2p_network_events --partitions 6 --replication-factor 3 --config retention.ms=86400000;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic catalog_updates --partitions 3 --replication-factor 3 --config cleanup.policy=compact;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic enriched_events --partitions 6 --replication-factor 3 --config retention.ms=3600000;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic fraud_alerts --partitions 3 --replication-factor 3 --config retention.ms=604800000;
+      kafka-topics --create --if-not-exists --bootstrap-server kafka-1:9092 --topic late_listening_events --partitions 3 --replication-factor 3 --config retention.ms=86400000;
+      echo '--- Topics créés ---';
+      kafka-topics --list --bootstrap-server kafka-1:9092;
+      "
+    restart: on-failure
 
   # ─────────────────────────────────────────
   # SPARK (Phase 2 — décommenter jeudi matin)
@@ -272,6 +332,6 @@ volumes:
   postgres-data:
   minio-data:
   airflow-logs:
-  # kafka-1-data:
-  # kafka-2-data:
-  # kafka-3-data:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:

@@ -482,17 +482,6 @@ with DAG(
 
     @task(task_id="upsert_to_postgres")
     def upsert_to_postgres(enriched_events: list, **context) -> dict:
-        """
-        Insère les événements dans PostgreSQL de façon idempotente.
-
-        TODO :
-            1. Utiliser PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
-            2. INSERT INTO listening_events (...) VALUES ...
-               ON CONFLICT (id) DO NOTHING
-            3. Retourner {"inserted": N, "skipped": M}
-
-        Hint : utiliser executemany() avec des tuples pour les performances.
-        """
         from airflow.providers.postgres.hooks.postgres import PostgresHook
 
         if not enriched_events:
@@ -501,6 +490,21 @@ with DAG(
         hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
         connection = hook.get_conn()
         cursor = connection.cursor()
+
+        # Upsert des peers simulés avant l'insert des événements
+        peer_rows = list({
+            event.get("source_peer_id") or event.get("source_peer")
+            for event in enriched_events
+        } - {None})
+        if peer_rows:
+            cursor.executemany(
+                """
+                INSERT INTO peers (id, peer_name, status)
+                VALUES (%s, %s, 'online')
+                ON CONFLICT (id) DO NOTHING
+                """,
+                [(peer_id, f"peer-{peer_id[:8]}") for peer_id in peer_rows],
+            )
 
         rows = [
             (
@@ -522,7 +526,7 @@ with DAG(
             """
             INSERT INTO listening_events
                 (id, user_id, track_id, source_peer_id, timestamp, duration_ms,
-                 device_type, geo_country, completed, event_source)
+                device_type, geo_country, completed, event_source)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO NOTHING
             """,

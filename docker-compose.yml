@@ -304,29 +304,37 @@ services:
   # SPARK (Phase 2 — décommenter jeudi matin)
   # ─────────────────────────────────────────
 
-  # spark-master:
-  #   image: bitnami/spark:3.5
-  #   environment:
-  #     SPARK_MODE: master
-  #     SPARK_MASTER_PORT: 7077
-  #     SPARK_MASTER_WEBUI_PORT: 8888
-  #   ports:
-  #     - "7077:7077"
-  #     - "8888:8888"
-  #   volumes:
-  #     - ./spark_jobs:/opt/spark-jobs
+  spark-master:
+    image: apache/spark:3.5.0
+    container_name: spotify-spark-master
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    user: root
+    environment:
+      KAFKA_BOOTSTRAP: "kafka-1:9092,kafka-2:9094,kafka-3:9096"
+      PATH: "/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      HOME: "/tmp"
+    ports:
+      - "7077:7077"
+      - "8888:8080"
+    volumes:
+      - ./spark_jobs:/opt/spark-jobs
+    depends_on:
+      - kafka-init
 
-  # spark-worker-1:
-  #   image: bitnami/spark:3.5
-  #   environment:
-  #     SPARK_MODE: worker
-  #     SPARK_MASTER_URL: spark://spark-master:7077
-  #     SPARK_WORKER_MEMORY: 2G
-  #     SPARK_WORKER_CORES: 2
-  #   depends_on:
-  #     - spark-master
-  #   volumes:
-  #     - ./spark_jobs:/opt/spark-jobs
+  spark-worker-1:
+    image: apache/spark:3.5.0
+    container_name: spotify-spark-worker-1
+    command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
+    user: root
+    environment:
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_CORES: "2"
+      PATH: "/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      HOME: "/tmp"
+    depends_on:
+      - spark-master
+    volumes:
+      - ./spark_jobs:/opt/spark-jobs
 
 volumes:
   postgres-data:

@@ -13,7 +13,7 @@ import redis as redis_lib
 
 from airflow import DAG
 from airflow.decorators import task
-from airflow.sensors.external_task import ExternalTaskSensor
+from airflow.sensors.sql import SqlSensor
 
 DAG_DOC = """
 ## recommendation_pipeline
@@ -62,11 +62,10 @@ with DAG(
     doc_md=DAG_DOC,
 ) as dag:
 
-    wait_for_aggregation = ExternalTaskSensor(
+    wait_for_aggregation = SqlSensor(
         task_id="wait_for_aggregation",
-        external_dag_id="aggregation_pipeline",
-        external_task_id=None,
-        allowed_states=["success"],
+        conn_id="spotify_postgres",
+        sql="SELECT COUNT(*) FROM daily_streams WHERE date = CURRENT_DATE",
         timeout=3600,
         poke_interval=60,
         mode="reschedule",

@@ -10,8 +10,8 @@ Usage :
     python -m src.p2p_simulator.simulator --mode fraud --peers 5
     python -m src.p2p_simulator.simulator --mode late_events
 
-TODO Phase 1 :  Compléter _generate_listening_event() et _publish_to_redis()
-TODO Phase 2 :  Activer _publish_to_kafka() et le mode fraude
+Phase 1 :  _generate_listening_event() et _publish_to_redis() — implémentés
+Phase 2 :  _publish_to_kafka() activé (dual publish Redis + Kafka)
 """
 from dotenv import load_dotenv
 load_dotenv(encoding="utf-8-sig")
@@ -28,8 +28,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import redis
-# Phase 2 — décommenter quand Kafka est prêt
-# from confluent_kafka import Producer
+from confluent_kafka import Producer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +42,8 @@ logger = logging.getLogger("p2p_simulator")
 # ─────────────────────────────────────────────────────────────
 
 REDIS_URL = "redis://localhost:6379/1"
-KAFKA_BOOTSTRAP = "kafka-1:9092"       # Phase 2
+# External listeners (host → Docker): localhost:29092,localhost:29094,localhost:29096
+KAFKA_BOOTSTRAP = "localhost:29092,localhost:29094,localhost:29096"
 
 TOPICS = {
     "listening":   "listening_events",
@@ -101,15 +101,22 @@ class P2PSimulator:
 
 
         # Connexion Redis
-        self.redis = redis.from_url(REDIS_URL, decode_responses=True)
+        self.redis = redis.from_url(REDIS_URL, decode_responses=True, socket_keepalive=True)
         try:
             self.redis.ping()
             self.redis_available = True
         except Exception as e:
             logger.error(f"Connexion Redis indisponible au démarrage ({REDIS_URL}) : {e}")
 
-        # Phase 2 — Kafka producer
-        # self.kafka_producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
+        # Kafka producer (Phase 2)
+        self.kafka_producer = Producer({
+            "bootstrap.servers": KAFKA_BOOTSTRAP,
+            "acks": "all",
+            "enable.idempotence": True,
+            "message.timeout.ms": 60000,
+            "reconnect.backoff.max.ms": 5000,
+        })
+        logger.info(f"Kafka producer initialisé ({KAFKA_BOOTSTRAP})")
 
         # Peers actifs simulés
         self.active_peers = [str(uuid.uuid4()) for _ in range(n_peers)]
@@ -147,6 +154,7 @@ class P2PSimulator:
     def _load_catalog(self):
         """
         Connecte à PostgreSQL et remplace SAMPLE_TRACKS par les vraies données.
+        Lève une exception si la connexion échoue ou si la table est vide.
         """
         global SAMPLE_TRACKS
         import psycopg2
@@ -158,25 +166,36 @@ class P2PSimulator:
         password = os.getenv("POSTGRES_PASSWORD", "spotify").strip()
         dbname = os.getenv("POSTGRES_DB", "spotify").strip()
 
-        print(f"Connexion à PostgreSQL pour charger le catalogue : {user}@{host}:{port}/{dbname}")
-        
+        print(f"[DEBUG] Tentative de connexion PostgreSQL : {user}@{host}:{port}/{dbname}")
+
         try:
             conn = psycopg2.connect(
-                host=host, port=port, user=user, password=password, dbname=dbname, 
+                host=host, port=port, user=user, password=password, dbname=dbname,
                 options="-c client_encoding=UTF8"
             )
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, duration_ms FROM tracks LIMIT 1000;")
-            tracks = cursor.fetchall()
-            if tracks:
-                SAMPLE_TRACKS = [{"id": str(t[0]), "duration_ms": t[1]} for t in tracks]
-                logger.info(f"{len(SAMPLE_TRACKS)} morceaux chargés depuis la BD.")
-            else:
-                logger.warning("La table tracks est vide, on utilise les fausses données.")
-            cursor.close()
-            conn.close()
+            print("[DEBUG] Connexion PostgreSQL établie.")
         except Exception as e:
-            logger.error(f"Impossible de charger le catalogue PostgreSQL : {e}")
+            print(f"[DEBUG] Échec de connexion PostgreSQL : {e}")
+            raise RuntimeError(
+                f"Impossible de se connecter à PostgreSQL ({user}@{host}:{port}/{dbname}) : {e}"
+            ) from e
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, duration_ms FROM tracks LIMIT 1000;")
+        tracks = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        print(f"[DEBUG] Requête exécutée, {len(tracks)} morceaux récupérés.")
+
+        if not tracks:
+            raise RuntimeError(
+                "La table tracks est vide — lance d'abord catalog_ingestion_pipeline "
+                "avant de démarrer le simulateur."
+            )
+
+        SAMPLE_TRACKS = [{"id": str(t[0]), "duration_ms": t[1]} for t in tracks]
+        print(f"[DEBUG] Catalogue chargé : {len(SAMPLE_TRACKS)} morceaux.")
 
     # ── Génération d'événements ──────────────────────────────
 
@@ -291,37 +310,45 @@ class P2PSimulator:
         channel = TOPICS[topic_key]
 
         self._publish_to_redis(channel, payload)
-        # Phase 2 — décommenter
-        # self._publish_to_kafka(channel, event.get("user_id", ""), payload)
+        self._publish_to_kafka(channel, event.get("user_id") or event.get("peer_id", ""), payload)
 
     def _publish_to_redis(self, channel: str, payload: str):
-        """
-        TODO : publier payload dans le channel Redis via pub/sub.
-        Utiliser self.redis.publish(channel, payload)
-        Gérer l'exception si Redis est indisponible (log + skip).
-        """
-        if not self.redis_available:
-            logger.warning(f"Redis indisponible, événement ignoré pour le channel {channel}")
-            return
-
+        """Publie payload dans le channel Redis. Tente une reconnexion automatique si la connexion est perdue."""
         try:
             self.redis.publish(channel, payload)
+            self.redis_available = True
         except Exception as e:
-            self.redis_available = False
-            logger.error(f"Erreur Redis sur {channel} : {e}")
+            logger.warning(f"Redis: erreur sur {channel} ({e}) — tentative de reconnexion...")
+            try:
+                self.redis = redis.from_url(REDIS_URL, decode_responses=True, socket_keepalive=True)
+                self.redis.publish(channel, payload)
+                self.redis_available = True
+                logger.info("Redis: reconnexion réussie.")
+            except Exception as e2:
+                self.redis_available = False
+                logger.error(f"Redis: reconnexion échouée ({e2}), événement ignoré.")
 
-    # def _publish_to_kafka(self, topic: str, key: str, payload: str):
-    #     """
-    #     TODO Phase 2 : publier payload dans le topic Kafka.
-    #     - key     : utilisé pour le partitionnement (user_id ou peer_id)
-    #     - acks    : 'all' pour la durabilité
-    #     - Gérer le callback de confirmation (delivery_report)
-    #     """
-    #     raise NotImplementedError("TODO Phase 2 : implémenter _publish_to_kafka()")
+    def _publish_to_kafka(self, topic: str, key: str, payload: str):
+        """Publie payload dans le topic Kafka. La clé (user_id/peer_id) assure le partitionnement."""
+        def _delivery_report(err, msg):
+            if err:
+                logger.error(f"Kafka delivery failed [{topic}] : {err}")
+
+        try:
+            self.kafka_producer.produce(
+                topic,
+                key=key.encode("utf-8"),
+                value=payload.encode("utf-8"),
+                callback=_delivery_report,
+            )
+            self.kafka_producer.poll(0)
+        except Exception as e:
+            logger.error(f"Erreur Kafka sur {topic} : {e}")
 
     def _shutdown(self, signum, frame):
         logger.info(f"Arrêt du simulateur (signal {signum}) — {self.event_count} événements publiés")
         self.running = False
+        self.kafka_producer.flush(timeout=10)
 
 
 # ─────────────────────────────────────────────────────────────

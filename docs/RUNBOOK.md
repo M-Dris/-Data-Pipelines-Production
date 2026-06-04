@@ -121,14 +121,65 @@ docker logs spark-master -f | grep -i "error\|exception\|oom"
 **Diagnostic :**
 ```bash
 # Vérifier que le checkpoint est sur MinIO
-docker exec minio mc ls local/spotify-checkpoints/streaming_trends/
+docker exec data-pipelines-production-minio-1 mc ls local/spotify-checkpoints/streaming_trends/
 
 # Vérifier les logs Spark au démarrage
-docker logs spark-master | grep "checkpoint"
+docker logs spotify-spark-master | grep -i "checkpoint\|batch\|offset"
 ```
 
 **Résolution :**
-→ À compléter par votre groupe
+```bash
+# 1. Vérifier que le checkpointLocation est bien configuré dans le job
+#    → spark_jobs/streaming_trends_job.py : CHECKPOINT_PATH = "s3a://spotify-checkpoints/streaming_trends"
+
+# 2. Si le checkpoint est corrompu, le supprimer et repartir de "earliest"
+docker exec data-pipelines-production-minio-1 mc rm --recursive --force local/spotify-checkpoints/streaming_trends/
+# Puis modifier startingOffsets en "earliest" pour rejouer les données
+
+# 3. Relancer le job — il doit afficher "Batch: N" avec N > 0 (reprise depuis le dernier offset)
+docker exec spotify-spark-master spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+  /opt/spark-jobs/streaming_trends_job.py
+```
+
+**Prévention :** Le checkpoint MinIO garantit la reprise exactement là où le job s'est arrêté. Ne jamais modifier `checkpointLocation` entre deux exécutions du même job.
+
+---
+
+### INC-07 — Exactly-once : vérification des doublons après redémarrage
+
+**Contexte :** Issue #16 — La chaîne exactly-once repose sur :
+- Producteur idempotent (`enable.idempotence=True`, `transactional.id=p2p-simulator-1`)
+- Consommateur Spark avec `isolation.level=read_committed` (ne lit que les messages committés)
+- Checkpoint Spark sur MinIO (reprise des offsets exacts)
+
+**Procédure de vérification :**
+
+```bash
+# 1. Lancer le job et noter le numéro du dernier batch affiché (ex: "Batch: 52")
+docker exec spotify-spark-master spark-submit \
+  --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 \
+  /opt/spark-jobs/streaming_trends_job.py
+
+# 2. Arrêter le job (Ctrl+C) et attendre 2 minutes (le simulateur continue à produire)
+
+# 3. Relancer le job → doit reprendre à "Batch: 53" (pas de retraitement des offsets déjà consommés)
+
+# 4. Vérifier l'absence de doublons dans la table listening_events (peuplée par le DAG batch)
+docker exec data-pipelines-production-postgres-1 psql -U spotify -d spotify -c \
+  "SELECT COUNT(*) AS total, COUNT(DISTINCT id) AS uniques, COUNT(*) - COUNT(DISTINCT id) AS doublons FROM listening_events;"
+```
+
+**Résultat attendu :** `doublons = 0`
+
+**Si des doublons apparaissent :**
+```bash
+# Vérifier que le simulateur utilise bien transactional.id
+# → src/p2p_simulator/simulator.py : "transactional.id": "p2p-simulator-1"
+
+# Vérifier que Spark lit en read_committed
+# → spark_jobs/streaming_trends_job.py : .option("kafka.isolation.level", "read_committed")
+```
 
 ---
 

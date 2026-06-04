@@ -110,3 +110,27 @@ Les events JSON doivent apparaître dans la console toutes les 10 secondes. Le c
 Résultat attendu : un seul batch affiché, puis le job se termine proprement.
 
 5 - Vérifier le checkpoint dans MinIO : http://localhost:9001/browser/spotify-checkpoints
+
+## Issue 16
+
+1 - Lancer le simulateur et le job Spark (dans deux terminaux séparés) :
+```
+python -m src.p2p_simulator.simulator --peers 10 --rate 3
+```
+```
+docker exec spotify-spark-master spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,org.postgresql:postgresql:42.7.1,org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262 /opt/spark-jobs/streaming_trends_job.py
+```
+
+2 - Noter le numéro du dernier batch affiché (ex: `Batch: 52`), puis arrêter le job Spark (Ctrl+C). Attendre 2 minutes (le simulateur continue de produire).
+
+3 - Relancer le job Spark. Résultat attendu : le job **ne repart pas de Batch 0** (checkpoint respecté). Il rattrape rapidement le backlog accumulé pendant l'arrêt (ex: saute de Batch 25 à Batch 45). C'est le comportement exactly-once normal — les offsets Kafka déjà consommés ne sont pas retraités.
+
+4 - Avant d'arrêter le job, noter le count :
+`docker exec data-pipelines-production-postgres-1 psql -U spotify -d spotify -c "SELECT COUNT(*) AS total, COUNT(DISTINCT event_id) AS uniques FROM streaming_event_ids;"`
+
+5 - Arrêter le job (Ctrl+C), attendre 2 minutes, relancer (cf. commande étape 1).
+
+6 - Vérifier l'absence de doublons après redémarrage :
+`docker exec data-pipelines-production-postgres-1 psql -U spotify -d spotify -c "SELECT COUNT(*) AS total, COUNT(DISTINCT event_id) AS uniques, COUNT(*) - COUNT(DISTINCT event_id) AS doublons FROM streaming_event_ids;"`
+
+Résultat attendu : `doublons = 0`, `total` > valeur avant arrêt (backlog rattrapé).

@@ -115,6 +115,7 @@ def read_kafka_stream(spark: SparkSession):
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
         .option("subscribe", KAFKA_TOPIC)
         .option("startingOffsets", "latest")
+        .option("kafka.isolation.level", "read_committed")  # Issue #16 : ne lit que les messages committés (EOS)
         .load()
     )
     return (
@@ -179,14 +180,38 @@ def main():
     events_df = read_kafka_stream(spark)
 
     # Issue #13 : sortie console pour valider la lecture du topic
-    # Issue #13 : checkpoint local (MinIO/S3A requis pour Issue #14+)
-    query = (
+    query_console = (
         events_df.writeStream
         .format("console")
         .outputMode("append")
         .option("truncate", False)
         .trigger(processingTime="10 seconds")
         .option("checkpointLocation", CHECKPOINT_PATH)
+        .start()
+    )
+
+    # Issue #16 : écriture des event_id dans PostgreSQL pour vérifier l'exactly-once
+    # INSERT ... ON CONFLICT DO NOTHING → idempotent, aucun doublon possible
+    def write_event_ids(batch_df, batch_id):
+        (
+            batch_df.select("event_id")
+            .write.format("jdbc")
+            .option("url", POSTGRES_URL)
+            .option("dbtable", "streaming_event_ids")
+            .option("driver", POSTGRES_PROPS["driver"])
+            .option("user", POSTGRES_PROPS["user"])
+            .option("password", POSTGRES_PROPS["password"])
+            .mode("append")
+            .save()
+        )
+        print(f"[Batch {batch_id}] {batch_df.count()} event_ids écrits dans streaming_event_ids")
+
+    query_ids = (
+        events_df.writeStream
+        .foreachBatch(write_event_ids)
+        .outputMode("append")
+        .trigger(processingTime="10 seconds")
+        .option("checkpointLocation", CHECKPOINT_PATH + "_ids")
         .start()
     )
 

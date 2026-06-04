@@ -108,15 +108,17 @@ class P2PSimulator:
         except Exception as e:
             logger.error(f"Connexion Redis indisponible au démarrage ({REDIS_URL}) : {e}")
 
-        # Kafka producer (Phase 2)
+        # Kafka producer (Phase 2) — exactly-once semantics
         self.kafka_producer = Producer({
             "bootstrap.servers": KAFKA_BOOTSTRAP,
             "acks": "all",
             "enable.idempotence": True,
+            "transactional.id": "p2p-simulator-1",   # Issue #16 : EOS bout-en-bout
             "message.timeout.ms": 60000,
             "reconnect.backoff.max.ms": 5000,
         })
-        logger.info(f"Kafka producer initialisé ({KAFKA_BOOTSTRAP})")
+        self.kafka_producer.init_transactions()
+        logger.info(f"Kafka producer initialisé ({KAFKA_BOOTSTRAP}) — transactions activées")
 
         # Peers actifs simulés
         self.active_peers = [str(uuid.uuid4()) for _ in range(n_peers)]
@@ -329,21 +331,30 @@ class P2PSimulator:
                 logger.error(f"Redis: reconnexion échouée ({e2}), événement ignoré.")
 
     def _publish_to_kafka(self, topic: str, key: str, payload: str):
-        """Publie payload dans le topic Kafka. La clé (user_id/peer_id) assure le partitionnement."""
+        """
+        Publie payload dans le topic Kafka dans une transaction atomique.
+        La clé (user_id/peer_id) assure le partitionnement.
+        Le wrapping begin/commit_transaction garantit l'exactly-once (Issue #16).
+        """
         def _delivery_report(err, msg):
             if err:
                 logger.error(f"Kafka delivery failed [{topic}] : {err}")
 
         try:
+            self.kafka_producer.begin_transaction()
             self.kafka_producer.produce(
                 topic,
                 key=key.encode("utf-8"),
                 value=payload.encode("utf-8"),
                 callback=_delivery_report,
             )
-            self.kafka_producer.poll(0)
+            self.kafka_producer.commit_transaction()
         except Exception as e:
             logger.error(f"Erreur Kafka sur {topic} : {e}")
+            try:
+                self.kafka_producer.abort_transaction()
+            except Exception as abort_err:
+                logger.error(f"Erreur abort_transaction : {abort_err}")
 
     def _shutdown(self, signum, frame):
         logger.info(f"Arrêt du simulateur (signal {signum}) — {self.event_count} événements publiés")

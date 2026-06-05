@@ -181,6 +181,10 @@ with DAG(
         """
         Met à jour le statut des événements dans dead_letter_events.
         Réinsère les valides dans listening_events (idempotent ON CONFLICT DO NOTHING).
+        
+        Distinction entre erreurs :
+        - Irrécupérables (user_id absent, track_id invalide) → status='abandoned' IMMÉDIATEMENT
+        - Temporaires (JSON invalide, erreur réseau) → retry jusqu'à 3 tentatives
         """
         hook       = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
         conn       = hook.get_conn()
@@ -238,8 +242,30 @@ with DAG(
                 # Traiter comme failed pour incrémenter retry
                 failed.append({"id": event["id"], "reason": str(e)})
 
-        # ── 2. Events échoués : incrémenter retry ou abandonner ─────
-        for event in failed:
+        # ── 2. Séparer erreurs irrécupérables et temporaires ────────
+        # Erreurs irrécupérables : pas de sens de retrier
+        UNRECOVERABLE_REASONS = {"missing_user_id", "unknown_track_id", "invalid_json"}
+        
+        failed_unrecoverable = [e for e in failed if e["reason"] in UNRECOVERABLE_REASONS]
+        failed_temporary     = [e for e in failed if e["reason"] not in UNRECOVERABLE_REASONS]
+
+        # ── 3a. Events irrécupérables → abandoned IMMÉDIATEMENT ─────
+        for event in failed_unrecoverable:
+            cur.execute(
+                """
+                UPDATE dead_letter_events
+                SET status        = 'abandoned',
+                    last_retry_at = NOW(),
+                    resolved_at   = NOW()
+                WHERE id = %s
+                """,
+                (event["id"],),
+            )
+            logging.info(f"Event {event['id']} abandonnée (erreur irrécupérable : {event['reason']})")
+            stats["abandoned"] += 1
+
+        # ── 3b. Events temporaires : retry jusqu'à MAX_RETRIES ──────
+        for event in failed_temporary:
             cur.execute(
                 """
                 UPDATE dead_letter_events
@@ -258,15 +284,17 @@ with DAG(
             if row:
                 new_status = row[0]
                 if new_status == "abandoned":
+                    logging.info(f"Event {event['id']} abandonnée (max retries atteint)")
                     stats["abandoned"] += 1
                 else:
+                    logging.info(f"Event {event['id']} marquée pending pour retry")
                     stats["pending"] += 1
 
         conn.commit()
         cur.close()
         conn.close()
 
-        # ── 3. Bilan ────────────────────────────────────────────────
+        # ── 4. Bilan ────────────────────────────────────────────────
         logging.info(
             f"Bilan DLQ — retraités: {stats['reprocessed']}, "
             f"abandonnés: {stats['abandoned']}, "

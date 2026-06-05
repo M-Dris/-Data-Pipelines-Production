@@ -110,7 +110,7 @@ with DAG(
     def extract_from_minio(**context) -> list[dict]:
         import boto3
         import json
-        from botocore.exceptions import ClientError
+        from botocore.exceptions import NoSuchKey
 
         s3 = boto3.client(
             's3',
@@ -121,19 +121,26 @@ with DAG(
 
         catalogs = []
         for filename in LABEL_FILES:
-            local_path = f"/opt/airflow/src/data/labels/{filename}"
+            try:
+                # Tenter la lecture depuis MinIO
+                obj = s3.get_object(Bucket=MINIO_BUCKET, Key=filename)
+                catalog = json.loads(obj['Body'].read())
+                logging.info(f"✅ Fichier téléchargé : {filename}")
+            except NoSuchKey:
+                # Fichier n'existe pas → log et skip (sera généré lors de l'init)
+                logging.warning(f"⚠️ Fichier {filename} non trouvé dans MinIO")
+                continue
+            except Exception as e:
+                logging.error(f"Erreur lors du téléchargement de {filename} : {e}")
+                continue
             
-            # Upload vers MinIO
-            with open(local_path, "rb") as f:
-                s3.put_object(Bucket=MINIO_BUCKET, Key=filename, Body=f, ContentType="application/json")
-                logging.info(f"⬆️ Fichier uploadé : {filename}")
-
-            # Télécharge et retourne
-            obj = s3.get_object(Bucket=MINIO_BUCKET, Key=filename)
-            catalog = json.loads(obj['Body'].read())
             catalogs.append(catalog)
-            logging.info(f"✅ Fichier téléchargé : {filename}")
 
+        if not catalogs:
+            raise ValueError(f"Aucun catalogue trouvé dans MinIO bucket '{MINIO_BUCKET}'. "
+                           f"Lance d'abord le générateur de données : "
+                           f"python -m src.data_generator.generate_catalog --artists 15")
+        
         return catalogs
 
     @task(task_id="validate_schema")

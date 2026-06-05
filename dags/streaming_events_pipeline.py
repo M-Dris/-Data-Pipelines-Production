@@ -532,10 +532,11 @@ with DAG(
         return {"inserted": inserted, "skipped": len(rows) - inserted}
 
     # ── Orchestration ─────────────────────────────────────────
-    raw       = consume_from_redis()
-    validated = validate_events(raw)
-    route_p2p_network_events(validated)
-    enriched  = enrich_events(validated)
+    raw        = consume_from_redis()
+    validated  = validate_events(raw)
+    p2p_routed = route_p2p_network_events(validated)
+    enriched   = enrich_events(validated)
 
+    # Branche parallèle : P2P events sont traités indépendamment
     store_to_parquet(enriched)
     upsert_to_postgres(enriched)

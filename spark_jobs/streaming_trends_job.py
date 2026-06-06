@@ -7,12 +7,28 @@ les tendances musicales temps réel.
 Outputs :
     - PostgreSQL → table `realtime_top_tracks` (top 10 par fenêtre de 5 min)
     - Redis      → clé `genre_listeners:live` (top genres par sliding window)
+    - Kafka      → topic `late_listening_events` (events tardifs > 10 min)
+
+Watermarking :
+    Chaque fenêtre applique un watermark de 10 minutes. Les events dont
+    l'event_time est antérieur de plus de 10 min à l'heure courante sont
+    détectés et routés vers le topic late_listening_events plutôt qu'ignorés.
+
+Checkpoints MinIO (exactly-once) :
+    Les checkpoints sont stockés sur MinIO (s3a://spotify-checkpoints/*)
+    pour garantir l'exactly-once après redémarrage Spark.
+    Vérification : SELECT COUNT(*) - COUNT(DISTINCT id) AS doublons FROM listening_events; → 0
 
 Lancement :
     spark-submit \\
         --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,\\
-                   org.postgresql:postgresql:42.7.1 \\
+                   org.postgresql:postgresql:42.7.1,\\
+                   org.apache.hadoop:hadoop-aws:3.3.4,\\
+                   com.amazonaws:aws-java-sdk-bundle:1.12.262 \\
         spark_jobs/streaming_trends_job.py
+
+Simulateur late events :
+    python -m src.p2p_simulator.simulator --mode late_events
 """
 
 import os
@@ -29,8 +45,15 @@ from pyspark.sql.types import (
 
 KAFKA_BOOTSTRAP   = os.getenv("KAFKA_BOOTSTRAP", "kafka-1:9092")
 KAFKA_TOPIC       = "listening_events"
-CHECKPOINT_PATH   = "/tmp/checkpoints/streaming_trends"
-CHECKPOINT_GENRES = "/tmp/checkpoints/streaming_genres"
+LATE_EVENTS_TOPIC = "late_listening_events"
+
+MINIO_ENDPOINT   = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+
+CHECKPOINT_PATH   = "s3a://spotify-checkpoints/streaming_trends"
+CHECKPOINT_GENRES = "s3a://spotify-checkpoints/streaming_genres"
+CHECKPOINT_LATE   = "s3a://spotify-checkpoints/late_events"
 
 POSTGRES_HOST     = os.getenv("POSTGRES_HOST", "postgres")
 POSTGRES_PORT     = os.getenv("POSTGRES_PORT", "5432")
@@ -75,6 +98,11 @@ def create_spark_session() -> SparkSession:
         .appName("SPOTIFY-streaming-trends")
         .config("spark.sql.shuffle.partitions", "6")
         .config("spark.streaming.stopGracefullyOnShutdown", "true")
+        .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
+        .config("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS_KEY)
+        .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET_KEY)
+        .config("spark.hadoop.fs.s3a.path.style.access", "true")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .getOrCreate()
     )
 
@@ -108,6 +136,40 @@ def read_kafka_stream(spark: SparkSession):
         .select("data.*")
         .withColumn("event_time", F.col("timestamp").cast(TimestampType()))
         .drop("timestamp")
+        .withWatermark("event_time", "10 minutes")
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# ROUTAGE LATE EVENTS
+# ─────────────────────────────────────────────────────────────
+
+def route_late_events(events_df):
+    """
+    Détecte les events tardifs (event_time < now - 10 min) et les publie
+    dans le topic Kafka late_listening_events pour traitement différé.
+
+    Le watermark de 10 min définit le seuil : un event est considéré tardif
+    si son event_time est antérieur de plus de 10 minutes à l'heure courante.
+    Utilise le sink Kafka natif Spark (spark-sql-kafka), sans dépendance externe.
+    """
+    late_df = events_df.filter(
+        F.expr("event_time < current_timestamp() - INTERVAL 10 MINUTES")
+    )
+
+    late_kafka = late_df.withColumn(
+        "value",
+        F.to_json(F.struct([F.col(c) for c in late_df.columns]))
+    ).select("value")
+
+    return (
+        late_kafka.writeStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
+        .option("topic", LATE_EVENTS_TOPIC)
+        .option("checkpointLocation", CHECKPOINT_LATE)
+        .trigger(processingTime="30 seconds")
+        .start()
     )
 
 
@@ -277,7 +339,7 @@ def main():
     spark = create_spark_session()
     spark.sparkContext.setLogLevel("WARN")
 
-    print("Démarrage streaming_trends_job — Issue #14")
+    print("Démarrage streaming_trends_job — Issue #15")
     print(f"Kafka : {KAFKA_BOOTSTRAP} → topic : {KAFKA_TOPIC}")
     print(f"Checkpoint top tracks : {CHECKPOINT_PATH}")
     print(f"Checkpoint genres     : {CHECKPOINT_GENRES}")
@@ -333,10 +395,12 @@ def main():
 
     query_top_tracks = compute_top_tracks_tumbling(events_df)
     query_genres     = compute_genre_listeners_sliding(events_df, catalog_df)
+    query_late       = route_late_events(events_df)
 
-    print("Deux queries streaming démarrées :")
-    print(f"  - top_tracks : {query_top_tracks.id}")
-    print(f"  - genres     : {query_genres.id}")
+    print("Trois queries streaming démarrées :")
+    print(f"  - top_tracks  : {query_top_tracks.id}")
+    print(f"  - genres      : {query_genres.id}")
+    print(f"  - late_events : {query_late.id}")
 
     spark.streams.awaitAnyTermination()
 

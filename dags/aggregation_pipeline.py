@@ -11,6 +11,7 @@ import os
 from airflow import DAG
 from airflow.decorators import task
 from airflow.sensors.sql import SqlSensor
+from airflow.sensors.external_task import ExternalTaskSensor
 
 DAG_DOC = """
 ## aggregation_pipeline
@@ -53,8 +54,18 @@ with DAG(
     doc_md=DAG_DOC,
 ) as dag:
 
+    wait_for_streaming = ExternalTaskSensor(
+        task_id="wait_for_streaming_events_dag",
+        external_dag_id="streaming_events_pipeline",
+        external_task_id=None,
+        allowed_states=["success"],
+        poke_interval=60,
+        timeout=3600,
+        mode="reschedule",
+    )
+
     wait_for_events = SqlSensor(
-        task_id="wait_for_streaming_events",
+        task_id="wait_for_listening_events_data",
         conn_id="spotify_postgres",
         sql="SELECT COUNT(*) FROM listening_events WHERE timestamp >= NOW() - INTERVAL '24 hours'",
         timeout=3600,
@@ -242,6 +253,7 @@ with DAG(
     artist_stats_result = compute_artist_stats()
     p2p_metrics_result  = compute_p2p_metrics()
 
-    wait_for_events >> [top_tracks_result, artist_stats_result, p2p_metrics_result]
+    # Phase 1-3 : ExternalTaskSensor + SqlSensor pour robustesse
+    wait_for_streaming >> wait_for_events >> [top_tracks_result, artist_stats_result, p2p_metrics_result]
 
     update_aggregates(top_tracks_result, artist_stats_result, p2p_metrics_result)
